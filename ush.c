@@ -300,6 +300,11 @@ Pipeline *parseLine(char *line)
     Pipeline *pipeline = createPipeline(MAX_PIPELINE_SIZE);
     pipeline->len = 0;
 
+    char *newLine = strchr(line, '\n');
+    if (newLine) {
+        *newLine = '\0';
+    }
+
     char *bgOp = strchr(line, '&');
     if (bgOp)
     {
