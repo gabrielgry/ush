@@ -26,7 +26,6 @@
 #define MAX_PIPELINE_SIZE 64
 #define MAX_JOBS 64
 
-
 typedef struct Command
 {
     char *name;
@@ -46,7 +45,8 @@ typedef struct Pipeline
 
 typedef void (*BuiltinHandler)(Command *command);
 
-typedef struct {
+typedef struct BuiltinMap
+{
     const char *name;
     BuiltinHandler handler;
 } BuiltinMap;
@@ -90,7 +90,8 @@ int uFork()
     return pid;
 }
 
-int uPipe(int *pipedes) {
+int uPipe(int *pipedes)
+{
     if (pipe(pipedes) == -1)
     {
         perror("pipe");
@@ -153,22 +154,29 @@ char *uGetHostname(size_t len)
     return name;
 }
 
-void cmdExit(Command *command) {
+void cmdExit(Command *command)
+{
     exit(EXIT_SUCCESS);
 }
 
-void cmdCd(Command *command) {
+void cmdCd(Command *command)
+{
     char *targetDir = command->args[1];
 
-    if (targetDir == NULL) {
+    if (targetDir == NULL)
+    {
         targetDir = getenv("HOME");
     }
 
-    if (chdir(targetDir) != 0) {
+    if (chdir(targetDir) != 0)
+    {
         perror("cd");
-    } else {
+    }
+    else
+    {
         char *cwd = NULL;
-        if ((cwd = getcwd(cwd, 0)) != NULL) {
+        if ((cwd = getcwd(cwd, 0)) != NULL)
+        {
             setenv("PWD", cwd, 1);
         }
         free(cwd);
@@ -216,11 +224,12 @@ char *readLine()
     return buf;
 }
 
-char **splitString(char *str, char *delim)
+char **splitString(char *string, char *delim)
 {
+    char *str = strdup(string);
+
     unsigned int len = BUFSIZ;
     char **tokens = uMalloc(len * sizeof(*tokens));
-
     unsigned int pos = 0;
 
     for (char *token = strtok(str, delim); token; token = strtok(NULL, delim))
@@ -231,10 +240,11 @@ char **splitString(char *str, char *delim)
             tokens = uRealloc(tokens, len * sizeof(*tokens));
         }
 
-        tokens[pos++] = token;
+        tokens[pos++] = strdup(token);
     }
 
     tokens[pos] = NULL;
+    free(str);
 
     return tokens;
 }
@@ -273,7 +283,14 @@ void freeCommand(Command *command)
     {
         return;
     }
+
+    for (int i = 0; command->args[i] != NULL; i++)
+    {
+        free(command->args[i]);
+    }
+
     free(command->args);
+    free(command->name);
     free(command);
 }
 
@@ -290,18 +307,22 @@ void freePipeline(Pipeline *pipeline)
     }
 
     free(pipeline->commands);
+    free(pipeline->inputFile);
+    free(pipeline->outputFile);
     free(pipeline);
 }
 
-Pipeline *parseLine(char *line)
+Pipeline *parseLine(char *lineIn)
 {
-    // Ex: cat < ush.c | grep int | wc > output.txt &
+    // Line Ex.: cat < ush.c | grep int | wc > output.txt &\n
+    char *line = strdup(lineIn);
 
     Pipeline *pipeline = createPipeline(MAX_PIPELINE_SIZE);
     pipeline->len = 0;
 
     char *newLine = strchr(line, '\n');
-    if (newLine) {
+    if (newLine)
+    {
         *newLine = '\0';
     }
 
@@ -316,7 +337,7 @@ Pipeline *parseLine(char *line)
     if (outputRedirectOp)
     {
         *outputRedirectOp = '\0';
-        pipeline->outputFile = strtok(outputRedirectOp + 1, SPACE_DELIM);
+        pipeline->outputFile = strdup(strtok(outputRedirectOp + 1, SPACE_DELIM));
     }
 
     char **pipedStrs = splitString(line, "|");
@@ -325,8 +346,6 @@ Pipeline *parseLine(char *line)
         if (i >= pipeline->maxLen)
         {
             puts(RED "Max pipeline size reached" RST);
-            freePipeline(pipeline);
-            free(pipedStrs);
             exit(EXIT_FAILURE);
         }
 
@@ -338,17 +357,21 @@ Pipeline *parseLine(char *line)
             if (inputRedirectOp)
             {
                 *inputRedirectOp = '\0';
-                pipeline->inputFile = strtok(inputRedirectOp + 1, SPACE_DELIM);
+                pipeline->inputFile = strdup(strtok(inputRedirectOp + 1, SPACE_DELIM));
             }
         }
 
         char **cmdArgs = splitString(pipedStrs[i], SPACE_DELIM);
-        pipeline->commands[i]->name = cmdArgs[0];
+        pipeline->commands[i]->name = strdup(cmdArgs[0]);
         pipeline->commands[i]->args = cmdArgs;
         pipeline->len++;
     }
 
+    for (int i = 0; pipedStrs[i] != NULL; i++) {
+        free(pipedStrs[i]);
+    }
     free(pipedStrs);
+    free(line);
     return pipeline;
 }
 
@@ -391,28 +414,33 @@ void setPipelineOutput(int pipeFds[])
     close(pipeFds[1]);
 }
 
-void printNewBackgroundJob(Pipeline *pipeline) {
-    if (!pipeline->background) return;
+void printNewBackgroundJob(Pipeline *pipeline)
+{
+    if (!pipeline->background)
+        return;
 
     for (int i = 0; i < pipeline->len; i++)
     {
         printf(YEL "[+process]:\t" RST);
         printf(MAG "%d\n" RST, pipeline->commands[i]->pid);
     }
-    
+
     printf(RST "\n");
 }
 
-void waitPipeline(Pipeline *pipeline) {
+void waitPipeline(Pipeline *pipeline)
+{
     for (int i = 0; i < pipeline->len; i++)
     {
         waitpid(pipeline->commands[i]->pid, NULL, 0);
     }
 }
 
-void reapChildren() {
+void reapChildren()
+{
     pid_t pid;
-    while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
+    while ((pid = waitpid(-1, NULL, WNOHANG)) > 0)
+    {
         printf(YEL "[+process terminated]:\t" RST);
         printf(MAG "%d\n" RST, pid);
     }
@@ -420,7 +448,8 @@ void reapChildren() {
 
 void executePipeline(Pipeline *pipeline)
 {
-    if (pipeline->len == 0) return;
+    if (pipeline->len == 0)
+        return;
 
     int pipefds[2];
     int inputFd = STDIN_FILENO;
@@ -479,24 +508,29 @@ void executePipeline(Pipeline *pipeline)
 }
 
 BuiltinMap builtinTable[] = {
-    { "exit", cmdExit },
-    { "cd" , cmdCd },
-    { NULL, NULL }
-};
+    {"exit", cmdExit},
+    {"cd", cmdCd},
+    {NULL, NULL}};
 
-BuiltinHandler findBuiltinHandler(const char *input) {
-    for (int i = 0; builtinTable[i].name != NULL; i++) {
-        if (strcmp(input, builtinTable[i].name) == 0) {
+BuiltinHandler findBuiltinHandler(const char *input)
+{
+    for (int i = 0; builtinTable[i].name != NULL; i++)
+    {
+        if (strcmp(input, builtinTable[i].name) == 0)
+        {
             return builtinTable[i].handler;
         }
     }
     return NULL;
 }
 
-void execute(Pipeline *pipeline) {
-    for (int i = 0; i < pipeline->len; i++) {
+void execute(Pipeline *pipeline)
+{
+    for (int i = 0; i < pipeline->len; i++)
+    {
         BuiltinHandler handler = findBuiltinHandler(pipeline->commands[i]->name);
-        if (handler) {
+        if (handler)
+        {
             handler(pipeline->commands[i]);
             return;
         }
@@ -513,7 +547,8 @@ int main()
 
         char *line = readLine();
 
-        if (line == NULL) continue;
+        if (line == NULL)
+            continue;
 
         Pipeline *pipeline = parseLine(line);
         execute(pipeline);
