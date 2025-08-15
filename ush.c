@@ -446,6 +446,8 @@ void executePipeline(Pipeline *pipeline)
 
             if (i == lastIndex && pipeline->outputFile)
                 setOutputRedirect(pipeline->outputFile);
+            else if (i == lastIndex && pipeline->background)
+                setOutputRedirect("/dev/null");
             else if (i < lastIndex)
                 setPipelineOutput(pipefds);
 
